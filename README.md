@@ -4,7 +4,13 @@
 
 A plugin to help with inlined vault variables.
 
-To install:
+### Dependencies
+
+```
+pip3 install ansible pynvim
+```
+
+### To install:
 
 ```
 Plug 'mauriciofierrom/ansible-vault-nvim', { 'do' : ':UpdateRemotePlugins' }
