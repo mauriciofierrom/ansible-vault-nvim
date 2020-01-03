@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import Mock, MagicMock
 from ansible_vault_nvim import AnsibleVaultNvim
 
-class TestInlineVault(unittest.TestCase):
+class TestAnsibleVaultNvim(unittest.TestCase):
     lines = [
             "variable: !vault |",
             "    $ANSIBLE_VAULT;1.1;AES256",
