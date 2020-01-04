@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.com/mauriciofierrom/ansible-vault-nvim.svg?branch=master)](https://travis-ci.com/mauriciofierrom/ansible-vault-nvim)
+
 # Ansible Vault Nvim Plugin
 
 ## Not ready for production.
