@@ -2,8 +2,10 @@ import unittest
 
 from unittest.mock import Mock, MagicMock
 from ansible_vault_nvim import AnsibleVaultNvim
+from ansible.module_utils._text import to_text
 
 class TestAnsibleVaultNvim(unittest.TestCase):
+    """ Unit tests for AnsibleVaultNvim """
     lines = [
             "variable: !vault |",
             "    $ANSIBLE_VAULT;1.1;AES256",
@@ -39,15 +41,6 @@ class TestAnsibleVaultNvim(unittest.TestCase):
             "    3034303735396430360a633964393738666561623839343530643538393039306133346239386637",
             "    3065" ]
 
-    def test_get_vault_variables(self):
-        nvim = Mock()
-        av = AnsibleVaultNvim(nvim)
-
-        assert av.get_vault_variables(self.lines) == ["variable",
-                                                      "var1",
-                                                      "another_variable",
-                                                      "yet_another" ]
-
     def test_format_entry(self):
         entry = "some\ncontent\nlonger\nthan\nwidth"
         nvim = Mock()
@@ -60,6 +53,18 @@ class TestAnsibleVaultNvim(unittest.TestCase):
         entry = "some"
         assert av.format_entry(entry) == "some"
 
+    def test_get_scalars(self):
+        nvim = Mock()
+        vs = {"ansible_vault_path": "secrets/vault"}
+        nvim.vars = MagicMock()
+        nvim.vars.__getitem__.side_effect = vs.__getitem__
+        nvim.vars.get.side_effect = vs.get
+        av = AnsibleVaultNvim(nvim)
+        l = list(filter(lambda x: x["var"] == "var2", av.get_scalars(self.lines,
+            lambda x: x.tag != "!vault")))
+
+        assert len(l)
+
     def test_generate_error_list(self):
         nvim = Mock()
         vs = {"ansible_vault_path": "secrets/vault"}
@@ -71,79 +76,10 @@ class TestAnsibleVaultNvim(unittest.TestCase):
         av = AnsibleVaultNvim(nvim)
         error_list = av.generate_error_list(self.lines)
 
-        assert error_list == [ "1 variable: a", "10 lvl1 - var1: a", "19 another_variable: a", "27 yet_another: a"]
-
-    def test_is_var(self):
-        nvim = Mock()
-        decrypted_vars = {"lvl1": {"inner": "value"}, "lvl2": {"inner": {"deep": "value"}}}
-
-        av = AnsibleVaultNvim(nvim)
-
-        assert av.is_var("inner", decrypted_vars)
-        assert av.is_var("lvl1", decrypted_vars) == False
-
-    def test_find_end_or_other_var(self):
-        nvim = Mock()
-        decrypted_vars = {
-            "variable": "a",
-            "lvl1": {
-                "var1": "a",
-                "var2": "something",
-            },
-            "non_vault_variable": "something",
-            "another_variable": "a",
-            "yet_another": "a"
-        }
-
-        av = AnsibleVaultNvim(nvim)
-
-        assert av.find_end_or_other_var("variable", decrypted_vars, self.lines, 0) == 7
-        assert av.find_end_or_other_var("var1", decrypted_vars, self.lines, 9) == 16
-
-    def test_get_variable_paths(self):
-        nvim = Mock()
-        av = AnsibleVaultNvim(nvim)
-        graph = {"group1": {
-            "sub1": {
-                "var1": {
-                    "leaf1" :"v4"
-                },
-                "var2": "v2",
-                "var3": "v3"
-            },
-            "sub2": {"var1": "v4", "var2": "v2", "leaf1": "v4"}
-            }
-        }
-        paths = av.get_variable_paths("var2", graph)
-
-        assert paths == [['group1', 'sub1', 'var2'], ['group1', 'sub2', 'var2']]
-
-    def test_get_var_siblings(self):
-        nvim = Mock()
-        av = AnsibleVaultNvim(nvim)
-
-        graph = {
-            "lvl1": {
-                "var1": "yep",
-                "var2": "nope"
-            },
-            "lvl2": {
-                "lonely": "boy"
-            },
-            "top-mate": "yep too"
-        }
-
-        assert av.get_var_siblings("var1", graph) == ["var2"]
-        assert len(av.get_var_siblings("loneley", graph)) == 0
-
-    def test_get_value_in_path(self):
-        nvim = Mock()
-        av = AnsibleVaultNvim(nvim)
-
-        graph = {"lvl1" : {"lvl2": "value"}, "some_other": "var"}
-        path = ["lvl2", "lvl1"]
-
-        assert av.get_value_in_path(graph, path) == "value"
+        assert error_list == [
+                "1 variable: a", "10 var1: a",
+                "19 another_variable: a", "27 yet_another: a"
+                ]
 
     def test_generate_entry(self):
         nvim = Mock()
@@ -159,8 +95,29 @@ class TestAnsibleVaultNvim(unittest.TestCase):
             "yet_another": "a"
         }
 
-        assert av.generate_entry("var1", decrypted_vars, self.lines) == ["10 lvl1 - var1: a"]
+        assert av.generate_entry({"var": "var1", "val": "a", "line": 10}) == "10 var1: a"
+    def test_encrypt(self):
+        nvim = Mock()
+        vs = {"ansible_vault_path": "secrets/vault"}
+        nvim.vars = MagicMock()
+        nvim.vars.__getitem__.side_effect = vs.__getitem__
+        nvim.vars.get.side_effect = vs.get
 
+        nvim.current.buffer = [x for x in self.lines]
+        nvim.current.line = "  var2: something"
+        current_line_number = nvim.current.buffer[:].index(nvim.current.line)
+        next_line = nvim.current.buffer[current_line_number + 1]
+
+        av = AnsibleVaultNvim(nvim)
+        encrypted_value = to_text(av.encrypt("something"))
+        new_lines_number = len(encrypted_value.split("\n"))
+        av.ansible_encrypt()
+
+        new_next_line = nvim.current.buffer[current_line_number +
+                new_lines_number]
+
+        assert next_line == new_next_line
+        assert nvim.current.buffer[current_line_number] == "  var2: !vault |"
 
     if __name__ == '__main__':
         unittest.main()
