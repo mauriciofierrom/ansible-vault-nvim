@@ -80,7 +80,7 @@ class TestAnsibleVaultNvim(unittest.TestCase):
         av = AnsibleVaultNvim(nvim)
 
         assert av.is_var("inner", decrypted_vars)
-        assert av.is_var("lvl1", decrypted_vars) == False
+        assert not av.is_var("lvl1", decrypted_vars)
 
     def test_find_end_or_other_var(self):
         nvim = Mock()
@@ -104,19 +104,31 @@ class TestAnsibleVaultNvim(unittest.TestCase):
         nvim = Mock()
         av = AnsibleVaultNvim(nvim)
         graph = {"group1": {
-            "sub1": {
-                "var1": {
-                    "leaf1" :"v4"
-                },
-                "var2": "v2",
-                "var3": "v3"
-            },
-            "sub2": {"var1": "v4", "var2": "v2", "leaf1": "v4"}
+                    "var2": {
+                        "var1": {
+                            "leaf1" :"v4"
+                        },
+                        "var3": [
+                            {
+                            "var2": "inside a list"
+                            },
+                            {"some": "other in the list"}
+                        ],
+                        "var2": "v2"
+                    },
+                    "sub2": {"var1": "v4", "var2": "v2", "leaf1": "v4"}
+                    }
+                }
+        graph2 = {
+            "group3": {
+                "var2": "something"
             }
         }
-        paths = av.get_variable_paths("var2", graph)
 
-        assert paths == [['group1', 'sub1', 'var2'], ['group1', 'sub2', 'var2']]
+        sequences = [graph, graph2]
+        paths = av.get_variable_paths("var2", sequences)
+
+        assert paths == [['group1', 'var2', 'var2'], ['group1', 'var2', 'var3', 'var2'], ['group1', 'sub2', 'var2'], ['group3', 'var2']]
 
     def test_get_var_siblings(self):
         nvim = Mock()

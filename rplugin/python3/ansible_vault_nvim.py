@@ -158,14 +158,20 @@ class AnsibleVaultNvim(object):
         os.remove("/tmp/efile")
 
     def get_variable_paths(self, key, graph, visited=[], paths=[]):
-        if key in graph.keys():
-            paths.append(visited + [key])
-        else:
+        if isinstance(graph, list):
+            for x in graph:
+                if isinstance(x, dict):
+                    self.get_variable_paths(key, x, visited, paths)
+        if isinstance(graph, dict):
+            if key in graph.keys() and not (isinstance(graph[key], dict) or isinstance(graph[key], list)):
+                paths.append(visited + [key])
+
             for x in graph.keys():
                 visited.append(x)
-                if isinstance(graph[x], dict):
+                if isinstance(graph[x], dict) or isinstance(graph[x], list):
                     self.get_variable_paths(key, graph[x], visited, paths)
                 visited.pop()
+
         return list(filter(None, paths))
 
     def get_value_in_path(self, graph, indices):
