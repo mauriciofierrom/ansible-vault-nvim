@@ -1,81 +1,97 @@
-import pynvim
+""" A Remote plugin to decrypt in-line ansible-vault variables """
 import os
+import pynvim
+import pdb
 
 from ansible.parsing import vault
 from ansible.module_utils._text import to_bytes, to_text
 from ansible.parsing.utils.yaml import from_yaml
 from ansible.parsing.vault import VaultLib
+from ansible.parsing.yaml.loader import AnsibleLoader
+from yaml import ScalarNode, MappingNode
 
 @pynvim.plugin
-class AnsibleVaultNvim(object):
+class AnsibleVaultNvim:
+    """ A class to perform Ansible Vault operations on Neovim buffers. """
+
     def __init__(self, nvim):
         self.nvim = nvim
 
     @pynvim.command('AnsibleDecryptAll')
     def decrypt_command(self):
+        """
+        Adds the AnsibleDecryptAll command to Neovim.
+
+        The command decrypts all vault-encrypted in-line variables present
+        in the active buffer and populates the location list with the
+        decrypted values:
+
+        <line-number> <variable-name> <decrypted-value>
+
+        The output is trimmed to fit the available width but can be opened
+        in-full in a vertical split (see view_secret).
+        """
+
         self.populate_location_list(self.nvim.current.buffer[:])
 
     @pynvim.function('SplitSecret')
-    def view_secret(self, args):
-        line = self.nvim.current.line
-        line_number = line.split(" ")[1]
-        value = line.split(" ")[2].replace(":", "")
+    def view_secret(self, _):
+        """
+        A Neovim function that only works in the location list populated by the
+        AnsibleDecryptAll command.
+
+        Upon pressing v on a line of the location list it opens a vertical split
+        with the whole decrypted contents of the variable.
+
+        Caveats:
+
+        In order to be able to show the variable in a buffer it has to be saved
+        in the /tmp folder, which is a security concern.
+        """
+
+        line_number = self.nvim.current.line.split(" ")[1]
+        variable_name = self.nvim.current.line.split(" ")[2].replace(":", "")
+
         self.nvim.command("wincmd k")
-        self.nvim.command("vsplit /tmp/" + str(line_number) + str(value))
+        self.nvim.command("vsplit /tmp/" + line_number + "-" + variable_name)
 
     @pynvim.command('AnsibleEncrypt')
     def ansible_encrypt(self):
-        current_line = self.nvim.current.line
-        current_var = current_line.split(":")[0]
-        current_buffer = self.nvim.current.buffer
-        decrypted_vars = self.decrypt("\n".join(current_buffer))
-        if current_var and decrypted_vars[current_var]:
-            encrypted_content = self.encrypt(current_var, self.buffer_as_string(current_buffer))
-            current_line_number = current_buffer[:].index(current_line)
-            end_line = self.find_end_or_other_var(current_var, decrypted_vars, current_buffer, current_line_number)
-            lines = [current_var + ": !vault |"] + [(" " * 4) + i
-                for i in encrypted_content.decode('utf-8').strip().split("\n")]
-            self.nvim.current.buffer[current_line_number : end_line + 1] = lines
+        """
+        A Neovim command to encrypt the scalar value under the current line.
+        """
 
-    def buffer_as_string(self, raw_buffer):
+        current_line = self.nvim.current.line
+        original_var = current_line.split(":")[0]
+        current_line_number = self.nvim.current.buffer[:].index(current_line)
+        regular_scalars = self.get_scalars(self.nvim.current.buffer[:], lambda x: x.tag != "!vault")
+        to_encrypt = list(filter(lambda x: x["line"] == (current_line_number + 1),
+            regular_scalars))[0]["val"]
+        encrypted_content = self.encrypt(to_encrypt)
+        lines = [original_var + ": !vault |"] + [(" " * 4) + i
+                for i in encrypted_content.decode('utf-8').strip().split("\n")]
+        tmp_rest = self.nvim.current.buffer[current_line_number + 1:]
+        self.nvim.current.buffer[current_line_number : len(encrypted_content)] = lines
+        # Check this abomination
+        self.nvim.current.buffer[current_line_number + len(encrypted_content) +
+                1:] = tmp_rest
+
+    @staticmethod
+    def _buffer_as_string(raw_buffer):
         return "\n".join(raw_buffer[:])
 
-    def find_end_or_other_var(self, key, decrypted_vars, current_buffer, current_line_number):
-        var = current_buffer[current_line_number].split(":")[0].strip()
-        if (current_line_number >= len(current_buffer) - 1) or (self.is_var(var, decrypted_vars) and var in self.get_var_siblings(key, decrypted_vars)) or not current_buffer[current_line_number].strip():
-            return current_line_number
-        else:
-            return self.find_end_or_other_var(key, decrypted_vars, current_buffer, current_line_number + 1)
+    def encrypt(self, to_encrypt):
+        """Encrypts a scalar value using ansible-vault"""
 
-    def is_var(self, key, graph):
-        if key in graph.keys():
-            if not isinstance(graph[key], dict):
-                return True
-        else:
-            for x in graph.keys():
-                if isinstance(graph[x], dict):
-                    found = self.is_var(key, graph[x])
-                    if found is not None:
-                        return found
-        return False
+        return VaultLib().encrypt(to_encrypt, self.generate_secrets())
 
-    def get_var_siblings(self, key, graph):
-        if key in graph.keys():
-            keys = list(graph.keys())
-            keys.remove(key)
-            return keys
-        else:
-            for x in graph.keys():
-                if isinstance(graph[x], dict):
-                    sibls = self.get_var_siblings(key, graph[x])
-                    if sibls:
-                        return sibls
-        return []
-
-    def encrypt(self, current_var, current_buffer_content):
-        return VaultLib().encrypt(self.decrypt(current_buffer_content)[current_var], self.generate_secrets())
-
+    # TODO: Improve support for vault files with multiple secrets
     def generate_secrets(self):
+        """
+        Generates secrets from a global setting pointing to a vault file, to be
+        used for de/encryption.
+        """
+
         vault_path = self.nvim.vars.get("ansible_vault_path", "vault")
         with open(vault_path) as vault_file:
             secret_text = vault_file.read().strip()
@@ -84,67 +100,51 @@ class AnsibleVaultNvim(object):
             secrets.load()
             return secrets
 
-    def decrypt(self, encrypted_content):
-        return from_yaml(encrypted_content, "current buffer", True, [("", self.generate_secrets())])
-
-    def get_vault_variables(self, raw_buffer):
-        """
-        Gets only variables that contain the !vault tag
-        """
-        return [i.strip().split(":")[0] for i in raw_buffer if "!vault" in i]
-
     def format_entry(self, entry):
+        """
+        Trim the entry if it exceeds the window size. Include three dots at
+        the end to let the user know the contents aren't complete.
+        """
+
         trimmed_entry = entry.strip().replace("\n", "")
         if len(trimmed_entry) + 3 > self.nvim.current.window.width:
             return trimmed_entry[:self.nvim.current.window.width-6] + "..."
-        else:
-            return trimmed_entry
+
+        return trimmed_entry
 
     def generate_error_list(self, raw_buffer_list):
+        """Creates the error list that contains the entries."""
+
         error_list = []
-        variables = self.decrypt("\n".join(raw_buffer_list))
-        vault_variables = list(set(self.get_vault_variables(raw_buffer_list)))
+        vault_variables = self.get_scalars(raw_buffer_list, lambda x: x.tag == "!vault")
 
         for vault_var in vault_variables:
-            entries = self.generate_entry(vault_var, variables, raw_buffer_list)
-            entries = list(map(self.format_entry, entries))
-            error_list = error_list + entries
+            # TODO: This is done for now because we don't know how to change the
+            # buffer to the previous/parent of the loclist
+            with open("/tmp/" + str(vault_var["line"]) + "-" + vault_var["var"], "w") as file:
+                file.write(to_text(vault_var["val"]))
+
+            entry = self.generate_entry(vault_var)
+            error_list = error_list + [self.format_entry(entry)]
 
         error_list.sort()
 
         return error_list
 
-    def generate_entry(self, vault_var, decrypted_vars, raw_buffer_list):
-        paths_to_var = self.get_variable_paths(vault_var, decrypted_vars)
-        entries = []
+    # TODO: Restore the formatted path
+    # TODO: Still need to write secrets to tmp dir
+    def generate_entry(self, decrypted_var):
+        """Generate a raw error list entry <line-number> <var>: <val>"""
 
-        for path in paths_to_var:
-            path_stack = path.copy()
-            path_stack.reverse()
-
-            for line in raw_buffer_list:
-                if not line.strip():
-                    if not path == path_stack:
-                        path_stack = path.copy()
-                        path_stack.reverse()
-
-                if path_stack and path_stack[-1] in line:
-                    path_stack.pop()
-
-                if not path_stack:
-                    line_number = raw_buffer_list.index(line) + 1
-                    formatted_path = " - ".join(path)
-                    path.reverse()
-                    value = self.get_value_in_path(decrypted_vars, path)
-                    entry = str(line_number) + " " + formatted_path + ": " + str(value)
-                    with open("/tmp/" + str(line_number) + vault_var, "w") as f:
-                        f.write(str(value))
-                    entries.append(entry)
-                    break
-
-        return entries
+        return str(decrypted_var["line"]) + " " + str(decrypted_var["var"]) + ": " + str(to_text(decrypted_var["val"]))
 
     def populate_location_list(self, raw_buffer_list):
+        """
+        Populates the location list with the error list containing the
+        decrypted variables. This also adds the mapping to the function that
+        opens the decrypted variables in a vertical split
+        """
+
         error_list = self.generate_error_list(raw_buffer_list)
 
         with open("/tmp/efile", "w") as error_file:
@@ -157,21 +157,44 @@ class AnsibleVaultNvim(object):
 
         os.remove("/tmp/efile")
 
-    def get_variable_paths(self, key, graph, visited=[], paths=[]):
-        if key in graph.keys():
-            paths.append(visited + [key])
-        else:
-            for x in graph.keys():
-                visited.append(x)
-                if isinstance(graph[x], dict):
-                    self.get_variable_paths(key, graph[x], visited, paths)
-                visited.pop()
-        return list(filter(None, paths))
+    def recurse_mappings(self, tup, secrets, vals, predicate):
+        """
+        Recurses the MappingNode to fetch only ScalarNode that satisfy the
+        given predicate
+        """
 
-    def get_value_in_path(self, graph, indices):
-        head = indices.pop()
+        var = tup[0]
+        val = tup[1]
 
-        if not indices:
-            return graph[head]
-        else:
-            return self.get_value_in_path(graph[head], indices)
+        # TODO: Wonky. Fix this.
+        if isinstance(tup[1], ScalarNode) and predicate(val):
+            vals.append({
+                "var": var.value,
+                "val":
+                VaultLib([("default",secrets)]).decrypt(to_bytes(val.value)) if
+                val.tag == "!vault" else val.value,
+                "line": var.start_mark.line + 1
+                })
+
+        if isinstance(tup[1], MappingNode):
+            for mapping in tup[1].value:
+                self.recurse_mappings(mapping, secrets, vals, predicate)
+
+        return vals
+
+    def get_scalars(self, raw_buffer_list, predicate):
+        """
+        Gets all scalar values that satisfy the predicate. Any encrypted value
+        is decrypted.
+        """
+
+        secrets = self.generate_secrets()
+        loader = AnsibleLoader(self._buffer_as_string(raw_buffer_list), "some", [("default", secrets)])
+        vals = []
+
+        scalar_nodes = loader.get_single_node()
+
+        for node in scalar_nodes.value:
+            self.recurse_mappings(node, secrets, vals, predicate)
+
+        return vals
