@@ -1,0 +1,17 @@
+[project]
+name = "ansible-vault-nvim"
+version = "0.1.0"
+description = "A Nvim plugin to show inline ansible-vault secrets"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "ansible>=13.2.0",
+    "neovim>=0.3.1",
+    "pynvim>=0.6.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "ruff>=0.14.14",
+]
