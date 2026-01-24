@@ -189,7 +189,7 @@ class AnsibleVaultNvim:
         """
 
         secrets = self.generate_secrets()
-        loader = AnsibleLoader(self._buffer_as_string(raw_buffer_list), "some", [("default", secrets)])
+        loader = AnsibleLoader(self._buffer_as_string(raw_buffer_list))
         vals = []
 
         scalar_nodes = loader.get_single_node()
