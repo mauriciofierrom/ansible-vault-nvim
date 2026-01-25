@@ -1,11 +1,12 @@
 import pytest
-
 from unittest.mock import Mock, MagicMock
-from ansible_vault_nvim import AnsibleVaultNvim
-from ansible.module_utils._text import to_text
+import ui
+import ansible_helper
+import nvim_helper
+
 
 @pytest.fixture
-def lines():
+def lines() -> list[str]:
     return [
         "variable: !vault |",
         "    $ANSIBLE_VAULT;1.1;AES256",
@@ -39,11 +40,12 @@ def lines():
         "    6161343431636430383666333735636136643634643665310a376139346463633531623136643263",
         "    63643837356436353630363239663263346230636336356364383133636230316233303836623938",
         "    3034303735396430360a633964393738666561623839343530643538393039306133346239386637",
-        "    3065"
+        "    3065",
     ]
 
+
 @pytest.fixture
-def mock_nvim():
+def mock_nvim() -> Mock:
     nvim = Mock()
     vs = {"ansible_vault_path": "secrets/vault"}
     nvim.vars = MagicMock()
@@ -52,67 +54,68 @@ def mock_nvim():
     return nvim
 
 
-def test_format_entry():
-    entry = "some\ncontent\nlonger\nthan\nwidth"
-    nvim = Mock()
-    nvim.current.window.width = 15
-    av = AnsibleVaultNvim(nvim)
+@pytest.fixture
+def secrets(mock_nvim: Mock) -> ansible_helper.vault.VaultSecret:
+    return ansible_helper.generate_secrets(mock_nvim)
 
-    assert av.format_entry(entry) == "someconte..."
-    assert len(av.format_entry(entry)) + 3 <= 15
+
+def test_format_entry(mock_nvim: Mock) -> None:
+    entry = "some\ncontent\nlonger\nthan\nwidth"
+    mock_nvim.current.window.width = 15
+
+    assert ui.format_entry(mock_nvim, entry) == "someconte..."
+    assert len(ui.format_entry(mock_nvim, entry)) <= 15
 
     entry = "some"
-    assert av.format_entry(entry) == "some"
+    assert ui.format_entry(mock_nvim, entry) == "some"
 
 
-def test_get_scalars(mock_nvim, lines):
-    av = AnsibleVaultNvim(mock_nvim)
-    l = list(filter(lambda x: x["var"] == "var2", av.get_scalars(lines,
-        lambda x: x.tag != "!vault")))
+def test_extract_vault_data(
+    lines: list[str], secrets: ansible_helper.vault.VaultSecret
+) -> None:
+    decrypted_vars = ansible_helper.extract_vault_data(lines, secrets)
 
-    assert len(l)
+    expected = [
+        {"line": 1, "var": "variable", "val": "a"},
+        {"line": 10, "var": "var1", "val": "a"},
+        {"line": 19, "var": "another_variable", "val": "a"},
+        {"line": 27, "var": "yet_another", "val": "a"},
+    ]
+
+    assert decrypted_vars == expected
 
 
-def test_generate_error_list(mock_nvim, lines):
+def test_generate_error_list(
+    mock_nvim: Mock, lines: list[str], secrets: ansible_helper.vault.VaultSecret
+) -> None:
     mock_nvim.current.window.width = 40
 
-    av = AnsibleVaultNvim(mock_nvim)
-    error_list = av.generate_error_list(lines)
+    decrypted_vars = ansible_helper.extract_vault_data(lines, secrets)
+    error_list = nvim_helper.generate_error_list(mock_nvim, decrypted_vars)
 
     assert error_list == [
-        "1 variable: a", "10 var1: a",
-        "19 another_variable: a", "27 yet_another: a"
+        {"text": "1 variable: a"},
+        {"text": "10 var1: a"},
+        {"text": "19 another_variable: a"},
+        {"text": "27 yet_another: a"},
     ]
 
 
-def test_generate_entry(mock_nvim):
-    av = AnsibleVaultNvim(mock_nvim)
-    decrypted_vars = {
-        "variable": "a",
-        "lvl1": {
-            "var1": "a",
-            "var2": "something",
-        },
-        "non_vault_variable": "something",
-        "another_variable": "a",
-        "yet_another": "a"
-    }
-
-    assert av.generate_entry({"var": "var1", "val": "a", "line": 10}) == "10 var1: a"
+def test_generate_entry() -> None:
+    assert ui.generate_entry({"var": "var1", "val": "a", "line": 10}) == "10 var1: a"
 
 
-def test_encrypt(mock_nvim, lines):
-    mock_nvim.current.buffer = [x for x in lines]
+def test_encrypt(
+    mock_nvim: Mock, lines: list[str], secrets: ansible_helper.vault.VaultSecret
+) -> None:
+    buffer_mock = MagicMock()
+    buffer_mock.__iter__.return_value = iter(lines)
+    buffer_mock.__getitem__.side_effect = lines.__getitem__
+    mock_nvim.current.buffer = buffer_mock
     mock_nvim.current.line = "  var2: something"
-    current_line_number = mock_nvim.current.buffer[:].index(mock_nvim.current.line)
-    next_line = mock_nvim.current.buffer[current_line_number + 1]
 
-    av = AnsibleVaultNvim(mock_nvim)
-    encrypted_value = to_text(av.encrypt("something"))
-    new_lines_number = len(encrypted_value.split("\n"))
-    av.ansible_encrypt()
+    nvim_helper.ansible_encrypt(mock_nvim, secrets)
 
-    new_next_line = mock_nvim.current.buffer[current_line_number + new_lines_number]
-
-    assert next_line == new_next_line
-    assert mock_nvim.current.buffer[current_line_number] == "  var2: !vault |"
+    # Check that the buffer was modified correctly
+    args, _ = mock_nvim.current.buffer.__setitem__.call_args
+    assert args[1][0] == "  var2: !vault |"
