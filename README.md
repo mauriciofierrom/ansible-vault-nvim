@@ -1,33 +1,108 @@
-[![Build Status](https://travis-ci.com/mauriciofierrom/ansible-vault-nvim.svg?branch=main)](https://travis-ci.com/mauriciofierrom/ansible-vault-nvim)
-
 # Ansible Vault Nvim Plugin
 
-A plugin to help with inlined ansible-vault variables.
+A plugin to help with inline ansible-vault variables.
 
-## Not ready for production.
+> [!NOTE]
+> This plugin is a work in progress and under sparse development.
 
-This is currently a toy project. It has the following caveats:
+## Features
 
-- It insecurely stores the decrypted data in the `/tmp` directory to show it from the
-  location list
-- Doesn't support different vault ids
+- Decrypt and view all vault variables in a location list
+- View decrypted secrets in split scratch buffers for improved visibility
+- Encrypt plain text variables in place
 
-### Dependencies
+## Dependencies
 
-```
-pip3 install ansible pynvim
-```
+The following python packages must be available to Neovim's python:
 
-### To install:
+- `ansible>=13.2.0`
+- `pynvim>=0.6.0`
 
-```
+## Installation
+
+E.g. via `vim-plug`
+```vim
 Plug 'mauriciofierrom/ansible-vault-nvim', { 'do' : ':UpdateRemotePlugins' }
 ```
 
-## How to use:
+## Usage
 
-- We currently support only password files and treat it as the `default`
-  vault-id. Set `let g:ansible_vault_path='path/vault-password-file'` to the path to your vault password file.
-- Use `:AnsibleDecryptAll` to show the location list with all the decrypted variables. Press `v` in the location list to open a vertical split with the contents of the current highlighted variable or `q` to close the list.
-- `:AnsibleEncrypt` on the line containing a variable to encrypt its value in
-  place.
+1. Set the vault password file path:
+```vim
+   let g:ansible_vault_path = 'path/to/vault-password-file'
+```
+   (Defaults to `vault` if not set)
+
+2. **Decrypt all variables**: Use `:AnsibleDecryptAll` to populate the location list with all decrypted variables
+   - Press `v` on any entry to view the full decrypted content in a split
+   - Press `q` to close the location list
+
+3. **Encrypt a variable**: Position cursor on a line with a plain text variable and run `:AnsibleEncrypt`
+
+## Limitations
+
+- Only supports single vault-id
+- Requires password file authentication
+
+## Development
+
+### First-time setup
+
+1. Install development dependencies:
+```bash
+   uv sync
+```
+
+Most work is done inside the `rplugin/python3` directory
+
+### Run tests
+```bash
+   uv run pytest
+```
+
+### Typecheck
+```bash
+   uv run pyright
+```
+
+### Lint
+```bash
+   uv run ruff check .
+```
+
+### Format
+```bash
+   uv run ruff format .
+```
+
+### Testing in Neovim
+
+#### Install the plugin locally
+
+E.g. via `vim-plug`
+
+```vim
+   " In your nvim config
+   Plug '/absolute/path/to/ansible-vault-nvim', { 'do': ':UpdateRemotePlugins' }
+```
+#### Via socket + python shell
+
+1. Start Neovim with a socket:
+```bash
+   NVIM_LISTEN_ADDRESS=/tmp/nvim nvim
+```
+
+2. In a Python shell
+```python
+   import ansible_vault_nvim
+   from pynvim import attach
+
+   nvim = attach('socket', path='/tmp/nvim')
+   plugin = ansible_vault_nvim.AnsibleVaultNvim(nvim)
+```
+
+3. You can then use the editor and where appropriate run plugin commands:
+
+``` python
+   plugin.decrypt_command()
+```
